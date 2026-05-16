@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import dynamic from 'next/dynamic';
 import { Chess } from 'chess.js';
-import type { DraggingPieceDataType } from 'react-chessboard/dist/types';
+type DraggingPieceDataType = { isSparePiece: boolean; position: string; pieceType: string };
 import { X, CheckCircle, XCircle } from 'lucide-react';
 
 const Chessboard = dynamic(() => import('react-chessboard').then(m => m.Chessboard), { ssr: false });
