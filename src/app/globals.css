@@ -194,6 +194,58 @@ p {
   50% { opacity: 0; }
 }
 
+/* Navigation buttons */
+.nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+.nav-btn:hover:not(:disabled) {
+  color: white;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.nav-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.btn-small-primary {
+  background: var(--primary);
+  color: white;
+  border: none;
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.btn-small-primary:hover { background: var(--primary-hover); }
+
+.btn-small-secondary {
+  background: rgba(30, 41, 59, 0.8);
+  color: #94a3b8;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.btn-small-secondary:hover { color: white; border-color: rgba(255, 255, 255, 0.3); }
+
 /* Badge/Tag */
 .badge {
   display: inline-flex;

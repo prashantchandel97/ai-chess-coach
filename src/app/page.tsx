@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { fetchGames, analyzeGame, aggregateErrors, ChessError } from '@/lib/chess-analyzer';
+import { fetchGames, analyzeGame, aggregateErrors, ChessError, Game } from '@/lib/chess-analyzer';
 import { ChessboardPanel } from '@/components/ChessboardPanel';
 import { Terminal, ShieldAlert, Award, Activity, Search, RefreshCw, ChevronRight, History, AlertTriangle } from 'lucide-react';
 
@@ -12,6 +12,14 @@ interface Weakness {
   fen: string;
   best_move: string;
   tip: string;
+}
+
+interface PracticeData {
+  weakness: Weakness;
+  gamePgn: string;
+  whitePlayer: string;
+  blackPlayer: string;
+  playerColor: 'white' | 'black';
 }
 
 interface SessionRecord {
@@ -53,8 +61,8 @@ export default function Home() {
   const [report, setReport] = useState<Weakness[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
   const [history, setHistory] = useState<SessionRecord[]>([]);
-  const [practiceWeakness, setPracticeWeakness] = useState<Weakness | null>(null);
-  const [playerColor, setPlayerColor] = useState<'white' | 'black'>('white');
+  const [games, setGames] = useState<Game[]>([]);
+  const [practiceData, setPracticeData] = useState<PracticeData | null>(null);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -91,19 +99,18 @@ export default function Home() {
       addLog(`Fetching last ${gamesCount} games for ${username}...`);
       const games = await fetchGames(username, parseInt(gamesCount));
       addLog(`Fetched ${games.length} games.`);
+      setGames(games);
 
       if (games.length === 0) throw new Error("No recent games found.");
 
       let lastRating = 'Unknown';
       const whiteOpenings: Record<string, number> = {};
       const blackOpenings: Record<string, number> = {};
-      let lastColor: 'white' | 'black' = 'white';
 
       games.forEach(g => {
         const isWhite = g.white.username.toLowerCase() === username.toLowerCase();
         if (isWhite && g.white.rating) lastRating = g.white.rating.toString();
         if (!isWhite && g.black.rating) lastRating = g.black.rating.toString();
-        lastColor = isWhite ? 'white' : 'black';
 
         let eco = 'Unknown';
         if (g.pgn) {
@@ -118,7 +125,6 @@ export default function Home() {
       const mostFreqWhite = Object.entries(whiteOpenings).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unknown';
       const mostFreqBlack = Object.entries(blackOpenings).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unknown';
       setDetectedProfile({ rating: lastRating, white: mostFreqWhite, black: mostFreqBlack });
-      setPlayerColor(lastColor);
 
       setStatus('analyzing');
       const allErrors: ChessError[] = [];
@@ -349,12 +355,22 @@ export default function Home() {
                         <p className="text-slate-400 text-sm">{weakness.tip}</p>
                       </div>
                     </div>
-                    {weakness.fen && weakness.best_move && (
+                    {weakness.fen && weakness.best_move && games[weakness.game] && (
                       <button
-                        onClick={() => setPracticeWeakness(weakness)}
+                        onClick={() => {
+                          const game = games[weakness.game];
+                          const isWhite = game.white.username.toLowerCase() === username.toLowerCase();
+                          setPracticeData({
+                            weakness,
+                            gamePgn: game.pgn,
+                            whitePlayer: game.white.username,
+                            blackPlayer: game.black.username,
+                            playerColor: isWhite ? 'white' : 'black',
+                          });
+                        }}
                         className="mt-3 flex items-center gap-1 text-sm text-primary hover:text-blue-300 font-semibold transition-colors"
                       >
-                        Practice this position <ChevronRight size={16} />
+                        Review &amp; Practice <ChevronRight size={16} />
                       </button>
                     )}
                   </div>
@@ -365,16 +381,19 @@ export default function Home() {
         </div>
       </div>
 
-      {practiceWeakness && (
+      {practiceData && (
         <ChessboardPanel
-          fen={practiceWeakness.fen}
-          bestMove={practiceWeakness.best_move}
-          playerColor={playerColor}
-          weaknessName={practiceWeakness.name}
-          tip={practiceWeakness.tip}
-          gameNum={practiceWeakness.game}
-          moveNum={practiceWeakness.move}
-          onClose={() => setPracticeWeakness(null)}
+          fen={practiceData.weakness.fen}
+          bestMove={practiceData.weakness.best_move}
+          playerColor={practiceData.playerColor}
+          weaknessName={practiceData.weakness.name}
+          tip={practiceData.weakness.tip}
+          gameNum={practiceData.weakness.game}
+          moveNum={practiceData.weakness.move}
+          gamePgn={practiceData.gamePgn}
+          whitePlayer={practiceData.whitePlayer}
+          blackPlayer={practiceData.blackPlayer}
+          onClose={() => setPracticeData(null)}
         />
       )}
     </main>
