@@ -107,7 +107,7 @@ export async function analyzeGame(
     if (prevScore !== null && move.color === playerColor) {
       const drop = playerColor === 'w' ? prevScore - normalizedScore : normalizedScore - prevScore;
 
-      if (drop > 50) {
+      if (drop > 20) {
         errors.push({
           game_index: gameIndex,
           game_url: game.url,

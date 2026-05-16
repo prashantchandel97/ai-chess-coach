@@ -230,15 +230,15 @@ export default function Home() {
           {detectedProfile && ['done','generating','aggregating','analyzing'].includes(status) && (
             <div className="glass-panel mt-4 animate-slide-up" style={{ animationDelay: '0.15s' }}>
               <div style={{ fontSize: '0.7rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#334155', marginBottom: '0.75rem' }}>Detected Profile</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '0.625rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: '0.625rem' }}>
                 {[
                   { label: 'Rating', value: detectedProfile.rating, color: '#60a5fa' },
                   { label: 'As White', value: detectedProfile.white },
                   { label: 'As Black', value: detectedProfile.black },
                 ].map(({ label, value, color }) => (
-                  <div key={label} className="stat-box">
+                  <div key={label} className="stat-box" style={{ minWidth: 0 }}>
                     <div style={{ fontSize: '0.65rem', color: '#334155', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '4px' }}>{label}</div>
-                    <div style={{ fontWeight: 800, fontSize: '0.85rem', color: color || '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={value}>{value}</div>
+                    <div style={{ fontWeight: 800, fontSize: '0.75rem', color: color || '#e2e8f0', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }} title={value}>{value}</div>
                   </div>
                 ))}
               </div>
