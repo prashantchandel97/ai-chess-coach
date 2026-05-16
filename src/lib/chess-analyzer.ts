@@ -145,7 +145,7 @@ export function aggregateErrors(allErrors: ChessError[]) {
     errors_by_piece: { R: 0, N: 0, B: 0, Q: 0, P: 0, K: 0 } as Record<string, number>,
     all_errors: allErrors
       .sort((a, b) => b.drop - a.drop)
-      .slice(0, 20)
+      .slice(0, 30)
   };
 
   allErrors.forEach(err => {

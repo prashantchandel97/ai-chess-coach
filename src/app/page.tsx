@@ -5,17 +5,22 @@ import { fetchGames, analyzeGame, aggregateErrors, ChessError, Game } from '@/li
 import { ChessboardPanel } from '@/components/ChessboardPanel';
 import { Terminal, ShieldAlert, Award, Activity, Search, RefreshCw, History, Zap } from 'lucide-react';
 
-interface Weakness {
-  name: string;
+interface WeaknessExample {
   game: number;
   move: number;
   fen: string;
   best_move: string;
+}
+
+interface Weakness {
+  name: string;
+  examples: WeaknessExample[];
   tip: string;
 }
 
 interface PracticeData {
   weakness: Weakness;
+  exampleIdx: number;
   gamePgn: string;
   whitePlayer: string;
   blackPlayer: string;
@@ -36,7 +41,7 @@ function loadHistory(username: string): SessionRecord[] {
   } catch { return []; }
 }
 
-function saveSession(username: string, gamesCount: number, weaknesses: Weakness[]) {
+function saveLocalSession(username: string, gamesCount: number, weaknesses: Weakness[]) {
   try {
     const h = loadHistory(username);
     h.push({ date: new Date().toLocaleDateString(), games_count: gamesCount, weaknesses: weaknesses.map(w => w.name.toLowerCase()) });
@@ -80,6 +85,22 @@ export default function Home() {
 
   useEffect(() => {
     setHistory(loadHistory(username));
+    // Also try loading from DB
+    fetch(`/api/db/history?username=${encodeURIComponent(username)}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.sessions?.length) {
+          const dbHistory: SessionRecord[] = d.sessions.map((s: any) => ({
+            date: new Date(s.created_at).toLocaleDateString(),
+            games_count: s.games_count,
+            weaknesses: (s.weaknesses as Weakness[]).map((w: any) =>
+              typeof w === 'string' ? w : (w.name ?? '').toLowerCase()
+            ),
+          }));
+          setHistory(dbHistory);
+        }
+      })
+      .catch(() => { /* fallback to localStorage already set */ });
   }, [username]);
 
   const addLog = (msg: string) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
@@ -118,20 +139,53 @@ export default function Home() {
       const mostFreqBlack = Object.entries(blackOpenings).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unknown';
       setDetectedProfile({ rating: lastRating, white: mostFreqWhite, black: mostFreqBlack });
 
+      // ── Check DB cache ──
+      addLog('Checking cached analysis...');
+      const gameUrls = fetchedGames.map(g => g.url);
+      let cachedErrors: Record<string, ChessError[]> = {};
+      try {
+        const cacheRes = await fetch('/api/db/cached-games', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, gameUrls }),
+        });
+        const cacheData = await cacheRes.json();
+        cachedErrors = cacheData.cached ?? {};
+        const cachedCount = Object.keys(cachedErrors).length;
+        if (cachedCount > 0) addLog(`Cache hit: ${cachedCount}/${fetchedGames.length} games already analyzed.`);
+      } catch { /* no cache available */ }
+
       setStatus('analyzing');
       const allErrors: ChessError[] = [];
+      const gameErrorsForDb: any[] = [];
 
       for (let i = 0; i < fetchedGames.length; i++) {
+        const game = fetchedGames[i];
+
+        if (cachedErrors[game.url]) {
+          addLog(`  Game ${i + 1}: using cached data (${cachedErrors[game.url].length} errors).`);
+          allErrors.push(...cachedErrors[game.url]);
+          continue;
+        }
+
         addLog(`Analyzing game ${i + 1}/${fetchedGames.length}...`);
-        const gameErrors = await analyzeGame(fetchedGames[i], username, workerRef.current!, 12, i, (move, total) => {
+        const isWhite = game.white.username.toLowerCase() === username.toLowerCase();
+        const gameErrors = await analyzeGame(game, username, workerRef.current!, 14, i, (move, total) => {
           if (move % 10 === 0 || move === total) addLog(`  Game ${i + 1}: move ${move}/${total}`);
         });
-        addLog(`  Game ${i + 1}: ${gameErrors.length} errors.`);
+        addLog(`  Game ${i + 1}: ${gameErrors.length} errors found.`);
         allErrors.push(...gameErrors);
+        gameErrorsForDb.push({
+          url: game.url, pgn: game.pgn,
+          white: game.white.username, black: game.black.username,
+          whiteRating: game.white.rating ?? null, blackRating: game.black.rating ?? null,
+          playerColor: isWhite ? 'white' : 'black',
+          errors: gameErrors,
+        });
       }
 
       setStatus('aggregating');
-      addLog(`Aggregating ${allErrors.length} errors...`);
+      addLog(`Aggregating ${allErrors.length} total errors...`);
       const aggregatedData = aggregateErrors(allErrors);
 
       setStatus('generating');
@@ -144,26 +198,38 @@ export default function Home() {
       if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed to generate report'); }
 
       const data = await res.json();
-      setReport(data.weaknesses);
+      const weaknesses: Weakness[] = data.weaknesses;
+      setReport(weaknesses);
       setStatus('done');
       addLog('Analysis complete.');
 
-      const updatedHistory = loadHistory(username);
-      saveSession(username, parseInt(gamesCount), data.weaknesses);
-      setHistory([...updatedHistory, { date: new Date().toLocaleDateString(), games_count: parseInt(gamesCount), weaknesses: data.weaknesses.map((w: Weakness) => w.name.toLowerCase()) }]);
+      // ── Save to DB + localStorage ──
+      saveLocalSession(username, parseInt(gamesCount), weaknesses);
+      setHistory(h => [...h, { date: new Date().toLocaleDateString(), games_count: parseInt(gamesCount), weaknesses: weaknesses.map(w => w.name.toLowerCase()) }]);
+
+      if (gameErrorsForDb.length > 0) {
+        fetch('/api/db/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, gamesCount: parseInt(gamesCount), rating: lastRating, weaknesses, gameErrors: gameErrorsForDb }),
+        }).catch(() => { /* non-critical */ });
+      }
 
     } catch (err: any) {
       console.error(err); setStatus('error'); setErrorMsg(err.message); addLog(`Error: ${err.message}`);
     }
   };
 
-  const openPractice = (weakness: Weakness) => {
-    const game = games[weakness.game];
+  const openPractice = (weakness: Weakness, exampleIdx: number = 0) => {
+    const ex = weakness.examples[exampleIdx];
+    if (!ex) return;
+    const game = games[ex.game];
     if (!game) return;
     const isWhite = game.white.username.toLowerCase() === username.toLowerCase();
     const opponentRating = (isWhite ? game.black.rating : game.white.rating) ?? 1200;
     setPracticeData({
-      weakness, gamePgn: game.pgn,
+      weakness, exampleIdx,
+      gamePgn: game.pgn,
       whitePlayer: game.white.username, blackPlayer: game.black.username,
       playerColor: isWhite ? 'white' : 'black',
       opponentRating,
@@ -294,7 +360,7 @@ export default function Home() {
                   <Zap size={28} style={{ color: '#a78bfa', flexShrink: 0 }} />
                   <div>
                     <div style={{ fontWeight: 900, fontSize: '1.2rem', color: '#e2e8f0', lineHeight: 1.2 }}>3 Key Weaknesses</div>
-                    <div style={{ fontSize: '0.78rem', color: '#334155', marginTop: '2px' }}>Based on your last {gamesCount} games · Click to review &amp; practice</div>
+                    <div style={{ fontSize: '0.78rem', color: '#334155', marginTop: '2px' }}>Based on your last {gamesCount} games · Click any example to review &amp; practice</div>
                   </div>
                 </div>
               </div>
@@ -303,6 +369,7 @@ export default function Home() {
               {report.map((weakness, idx) => {
                 const recurring = recurringCount(weakness.name, history.slice(0, -1));
                 const g = CARD_GRADIENTS[idx] ?? CARD_GRADIENTS[2];
+                const primaryEx = weakness.examples[0];
                 return (
                   <div key={idx} className="weakness-card">
                     <div className="weakness-card-accent" style={{ background: g.bar }} />
@@ -319,20 +386,34 @@ export default function Home() {
                               ⚠ ×{recurring + 1}
                             </span>
                           )}
-                        </div>
-                        <div style={{ fontSize: '0.72rem', color: '#334155', marginBottom: '6px' }}>
-                          Game {weakness.game + 1} · Move {weakness.move}
+                          <span style={{ fontSize: '0.68rem', color: '#334155' }}>{weakness.examples.length} example{weakness.examples.length !== 1 ? 's' : ''}</span>
                         </div>
                         <p style={{ fontSize: '0.84rem', color: '#64748b', lineHeight: '1.55', marginBottom: '10px' }}>{weakness.tip}</p>
-                        {weakness.fen && weakness.best_move && games[weakness.game] && (
-                          <button
-                            onClick={() => openPractice(weakness)}
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '0.78rem', fontWeight: 800, background: 'rgba(59,130,246,0.08)', color: '#60a5fa', border: '1px solid rgba(59,130,246,0.2)', padding: '5px 12px', borderRadius: '7px', cursor: 'pointer', transition: 'all 0.15s', letterSpacing: '0.01em' }}
-                            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(59,130,246,0.16)'; }}
-                            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(59,130,246,0.08)'; }}
-                          >
-                            Review &amp; Practice →
-                          </button>
+
+                        {/* Example chips */}
+                        {weakness.examples.length > 0 && games[primaryEx?.game] && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                            {weakness.examples.map((ex, ei) => (
+                              games[ex.game] && ex.fen && ex.best_move ? (
+                                <button
+                                  key={ei}
+                                  onClick={() => openPractice(weakness, ei)}
+                                  style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: '4px',
+                                    fontSize: '0.74rem', fontWeight: 700,
+                                    background: ei === 0 ? 'rgba(59,130,246,0.1)' : 'rgba(30,41,59,0.7)',
+                                    color: ei === 0 ? '#60a5fa' : '#475569',
+                                    border: `1px solid ${ei === 0 ? 'rgba(59,130,246,0.25)' : 'rgba(255,255,255,0.06)'}`,
+                                    padding: '4px 10px', borderRadius: '7px', cursor: 'pointer', transition: 'all 0.15s',
+                                  }}
+                                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(59,130,246,0.18)'; (e.currentTarget as HTMLButtonElement).style.color = '#93c5fd'; }}
+                                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = ei === 0 ? 'rgba(59,130,246,0.1)' : 'rgba(30,41,59,0.7)'; (e.currentTarget as HTMLButtonElement).style.color = ei === 0 ? '#60a5fa' : '#475569'; }}
+                                >
+                                  G{ex.game + 1}·M{ex.move} {ei === 0 ? '→' : ''}
+                                </button>
+                              ) : null
+                            ))}
+                          </div>
                         )}
                       </div>
                     </div>
@@ -346,13 +427,13 @@ export default function Home() {
 
       {practiceData && (
         <ChessboardPanel
-          fen={practiceData.weakness.fen}
-          bestMove={practiceData.weakness.best_move}
+          fen={practiceData.weakness.examples[practiceData.exampleIdx].fen}
+          bestMove={practiceData.weakness.examples[practiceData.exampleIdx].best_move}
           playerColor={practiceData.playerColor}
           weaknessName={practiceData.weakness.name}
           tip={practiceData.weakness.tip}
-          gameNum={practiceData.weakness.game}
-          moveNum={practiceData.weakness.move}
+          gameNum={practiceData.weakness.examples[practiceData.exampleIdx].game}
+          moveNum={practiceData.weakness.examples[practiceData.exampleIdx].move}
           gamePgn={practiceData.gamePgn}
           whitePlayer={practiceData.whitePlayer}
           blackPlayer={practiceData.blackPlayer}

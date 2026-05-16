@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { Chess } from 'chess.js';
 import { X, ChevronLeft, ChevronRight, Lightbulb } from 'lucide-react';
@@ -205,11 +205,63 @@ export function ChessboardPanel({
     sfGetBest(chess.fen(), stockfishRef.current).then(best => { pendingBestRef.current = best; });
   }, [continueFen, mode, playerColor, gameOver]);
 
+  // Arrow key navigation in review mode
+  useEffect(() => {
+    if (mode !== 'review') return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') { e.preventDefault(); setCurIdx(i => Math.max(0, i - 1)); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); setCurIdx(i => Math.min(positions.length - 1, i + 1)); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [mode, positions.length]);
+
   // ---- Review navigation ----
   function goTo(idx: number) {
     setCurIdx(Math.max(0, Math.min(idx, positions.length - 1)));
     if (mode !== 'review') setMode('review');
   }
+
+  // ---- Unified continue mode initializer ----
+  const initContinueMode = useCallback(async (chess: Chess, initialMoves: ContinueMove[]) => {
+    if (isThinkingRef.current) return;
+
+    continueChessRef.current = chess;
+    setContinueFen(chess.fen());
+    setContinueMovelist(initialMoves);
+    setGameOver(false);
+    setGameResult('');
+    setTutorMsg({ text: `Play on — Stockfish plays at ${opponentRating} ELO (Skill ${skill}).`, type: 'info' });
+    setMode('continue');
+
+    if (chess.isGameOver()) {
+      setGameOver(true);
+      setGameResult(chess.isCheckmate() ? 'Checkmate!' : 'Draw');
+      return;
+    }
+
+    const isOpponentTurn = (playerColor === 'white') === (chess.turn() === 'b') ||
+                           (playerColor === 'black') === (chess.turn() === 'w');
+
+    if (isOpponentTurn && stockfishRef.current) {
+      isThinkingRef.current = true;
+      setIsThinking(true);
+      const uci = await sfGetMove(chess.fen(), stockfishRef.current, skill, sfDepth);
+      if (uci && continueChessRef.current) {
+        const m = continueChessRef.current.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: (uci[4] as any) || undefined });
+        if (m) {
+          setContinueFen(continueChessRef.current.fen());
+          setContinueMovelist(prev => [...prev, { san: m.san, isPlayer: false }]);
+          if (continueChessRef.current.isGameOver()) {
+            setGameOver(true);
+            setGameResult(continueChessRef.current.isCheckmate() ? 'Checkmate!' : 'Draw');
+          }
+        }
+      }
+      isThinkingRef.current = false;
+      setIsThinking(false);
+    }
+  }, [opponentRating, playerColor, skill, sfDepth]);
 
   // ---- Puzzle ----
   function handlePuzzleDrop({ piece, sourceSquare, targetSquare }: { piece: DraggingPieceDataType; sourceSquare: string; targetSquare: string | null }): boolean {
@@ -232,31 +284,23 @@ export function ChessboardPanel({
     } catch { return false; }
   }
 
-  // ---- Continue ----
-  async function startContinue() {
-    const chess = new Chess(puzzleFen);
-    continueChessRef.current = chess;
-    setContinueFen(chess.fen());
-    setContinueMovelist([]);
-    setGameOver(false);
-    setGameResult('');
-    setTutorMsg({ text: `Play on — Stockfish plays at ${opponentRating} ELO (Skill ${skill}).`, type: 'info' });
-    setMode('continue');
-    isThinkingRef.current = true;
-    setIsThinking(true);
-    const sf = stockfishRef.current;
-    if (sf) {
-      const uci = await sfGetMove(chess.fen(), sf, skill, sfDepth);
-      if (uci) {
-        const m = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: (uci[4] as any) || undefined });
-        if (m) { setContinueFen(chess.fen()); setContinueMovelist([{ san: m.san, isPlayer: false }]); }
-        if (chess.isGameOver()) { setGameOver(true); setGameResult(chess.isCheckmate() ? 'Checkmate!' : 'Draw'); }
-      }
-    }
-    isThinkingRef.current = false;
-    setIsThinking(false);
+  // ---- Review drag → auto play-on ----
+  function handleReviewDrop({ piece, sourceSquare, targetSquare }: { piece: DraggingPieceDataType; sourceSquare: string; targetSquare: string | null }): boolean {
+    if (!targetSquare || isThinkingRef.current) return false;
+    try {
+      const chess = new Chess(positions[curIdx]);
+      const isPlayerTurn = (playerColor === 'white') === (chess.turn() === 'w');
+      if (!isPlayerTurn) return false;
+      const pt = piece.pieceType.toLowerCase();
+      const isPromo = pt[1] === 'p' && (targetSquare[1] === '8' || targetSquare[1] === '1');
+      const move = chess.move({ from: sourceSquare, to: targetSquare, promotion: isPromo ? 'q' : undefined });
+      if (!move) return false;
+      initContinueMode(chess, [{ san: move.san, isPlayer: true }]);
+      return true;
+    } catch { return false; }
   }
 
+  // ---- Continue drop ----
   function handleContinueDrop({ piece, sourceSquare, targetSquare }: { piece: DraggingPieceDataType; sourceSquare: string; targetSquare: string | null }): boolean {
     const chess = continueChessRef.current;
     if (!chess || isThinkingRef.current || gameOver || !targetSquare) return false;
@@ -277,7 +321,6 @@ export function ChessboardPanel({
         return true;
       }
 
-      // Async: tutor + opponent move
       const capturedUci = sourceSquare + targetSquare;
       const capturedMoveSan = move.san;
       const capturedPendingBest = pendingBestRef.current;
@@ -289,7 +332,6 @@ export function ChessboardPanel({
       setIsThinking(true);
 
       (async () => {
-        // Tutor
         if (capturedTutor && capturedPendingBest) {
           const msg = tutorFeedback(capturedUci, capturedPendingBest, capturedPreFen, capturedMoveSan);
           setTutorMsg(msg);
@@ -300,7 +342,6 @@ export function ChessboardPanel({
             return list;
           });
         }
-        // Stockfish opponent move
         if (sf && continueChessRef.current) {
           const uci = await sfGetMove(continueChessRef.current.fen(), sf, skill, sfDepth);
           const c = continueChessRef.current;
@@ -335,7 +376,8 @@ export function ChessboardPanel({
   } else if (mode === 'continue') {
     boardOptions = { position: continueFen, boardOrientation: playerColor, allowDragging: !isThinking && !gameOver, onPieceDrop: handleContinueDrop };
   } else {
-    boardOptions = { position: positions[curIdx], boardOrientation: playerColor, allowDragging: false };
+    // Review mode: allow dragging — any valid move auto-enters play-on
+    boardOptions = { position: positions[curIdx], boardOrientation: playerColor, allowDragging: true, onPieceDrop: handleReviewDrop };
   }
 
   // Move pairs for review list
@@ -382,7 +424,7 @@ export function ChessboardPanel({
               </button>
             ))}
             {puzzleSolved && (
-              <button onClick={startContinue} style={{ fontSize: '0.72rem', padding: '4px 12px', borderRadius: '9999px', fontWeight: 700, border: 'none', cursor: 'pointer', transition: 'all 0.15s', background: mode === 'continue' ? '#059669' : 'rgba(6,78,59,0.5)', color: mode === 'continue' ? '#fff' : '#34d399' }}>
+              <button onClick={() => initContinueMode(new Chess(puzzleFen), [])} style={{ fontSize: '0.72rem', padding: '4px 12px', borderRadius: '9999px', fontWeight: 700, border: 'none', cursor: 'pointer', transition: 'all 0.15s', background: mode === 'continue' ? '#059669' : 'rgba(6,78,59,0.5)', color: mode === 'continue' ? '#fff' : '#34d399' }}>
                 ▶ Play On
               </button>
             )}
@@ -412,6 +454,7 @@ export function ChessboardPanel({
                   <button onClick={() => goTo(curIdx - 1)} disabled={curIdx === 0} className="nav-btn"><ChevronLeft size={14} /></button>
                   <span style={{ flex: 1, textAlign: 'center', fontSize: '0.72rem', color: '#475569' }}>
                     {curIdx === 0 ? 'Start' : `Move ${Math.ceil(curIdx / 2)} · ${curIdx % 2 === 1 ? 'White' : 'Black'}`}
+                    <span style={{ color: '#1e293b', marginLeft: '6px', fontSize: '0.65rem' }}>← → to navigate · drag to play</span>
                   </span>
                   <button onClick={() => goTo(curIdx + 1)} disabled={curIdx >= positions.length - 1} className="nav-btn"><ChevronRight size={14} /></button>
                   <button onClick={() => goTo(positions.length - 1)} className="nav-btn">⏭</button>
@@ -503,7 +546,6 @@ export function ChessboardPanel({
                     ))
                   }
                 </div>
-                {/* Hint button */}
                 {tutorEnabled && !isThinking && !gameOver && (
                   <button
                     onClick={() => { if (pendingBestRef.current) setTutorMsg({ text: `Hint: consider ${pendingBestRef.current.slice(0,2)}→${pendingBestRef.current.slice(2,4)}`, type: 'hint' }); }}

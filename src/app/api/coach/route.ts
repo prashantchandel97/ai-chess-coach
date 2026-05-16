@@ -14,17 +14,17 @@ export async function POST(req: Request) {
 
     const userPrompt = `Player rated ${rating || 'unknown'}. Openings: ${white_opening || 'any'} (white), ${black_opening || 'any'} (black).
 
-Error data (top 20 worst mistakes, each has game_index, move_number, fen, best_move in UCI format, drop in centipawns):
+Error data (top 30 worst mistakes, each has game_index, move_number, fen, best_move in UCI format, drop in centipawns):
 ${JSON.stringify(aggregatedData, null, 2)}
 
-Find 3 recurring weakness patterns. For each, pick the single clearest error from all_errors that best illustrates it.
+Identify 3 recurring weakness PATTERNS. For each pattern, collect ALL errors from all_errors that fit it (up to 5 examples, sorted by drop desc).
 
 Return ONLY this JSON (no preamble, no markdown):
-[{"name":"3-5 word label","game":game_index,"move":move_number,"fen":"fen string","best_move":"uci e.g. e2e4","tip":"one sentence max 12 words"}]`;
+[{"name":"3-5 word label","examples":[{"game":game_index,"move":move_number,"fen":"fen string","best_move":"uci e.g. e2e4"}],"tip":"one sentence max 12 words"}]`;
 
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 800,
+      max_tokens: 1500,
       system: systemPrompt,
       messages: [{ role: "user", content: userPrompt }]
     });
