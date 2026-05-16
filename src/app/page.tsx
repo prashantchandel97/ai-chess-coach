@@ -1,65 +1,294 @@
-import Image from "next/image";
+'use client';
+
+import { useState, useEffect, useRef } from 'react';
+import { fetchGames, analyzeGame, aggregateErrors, ChessError } from '@/lib/chess-analyzer';
+import { Terminal, ShieldAlert, Award, Activity, Search, RefreshCw, ChevronRight } from 'lucide-react';
 
 export default function Home() {
+  const [username, setUsername] = useState('prashant_chandel');
+  const [rating, setRating] = useState('1100');
+  const [gamesCount, setGamesCount] = useState('10');
+  const [whiteOpening, setWhiteOpening] = useState('London System');
+  const [blackOpening, setBlackOpening] = useState('Kings Indian Defense');
+  
+  const [status, setStatus] = useState<'idle' | 'fetching' | 'analyzing' | 'aggregating' | 'generating' | 'done' | 'error'>('idle');
+  const [logs, setLogs] = useState<string[]>([]);
+  const [report, setReport] = useState<any[]>([]);
+  const [errorMsg, setErrorMsg] = useState('');
+  
+  const logsEndRef = useRef<HTMLDivElement>(null);
+  const workerRef = useRef<Worker | null>(null);
+
+  // Initialize Web Worker
+  useEffect(() => {
+    workerRef.current = new Worker('/stockfish.js');
+    return () => {
+      workerRef.current?.terminate();
+    };
+  }, []);
+
+  // Auto-scroll logs
+  useEffect(() => {
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs]);
+
+  const addLog = (msg: string) => {
+    setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+  };
+
+  const startAnalysis = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!username || !workerRef.current) return;
+    
+    setStatus('fetching');
+    setLogs([]);
+    setReport([]);
+    setErrorMsg('');
+    
+    try {
+      addLog(`Fetching last ${gamesCount} games for ${username}...`);
+      const games = await fetchGames(username, parseInt(gamesCount));
+      addLog(`Successfully fetched ${games.length} games.`);
+      
+      if (games.length === 0) {
+        throw new Error("No recent games found.");
+      }
+
+      setStatus('analyzing');
+      const allErrors: ChessError[] = [];
+      
+      for (let i = 0; i < games.length; i++) {
+        addLog(`Analyzing game ${i + 1}/${games.length} with Stockfish...`);
+        const gameErrors = await analyzeGame(
+          games[i], 
+          username, 
+          workerRef.current, 
+          12, // depth
+          (move, total) => {
+            if (move % 10 === 0) {
+              addLog(`  Game ${i + 1}: Evaluating move ${move}/${total}`);
+            }
+          }
+        );
+        addLog(`  Game ${i + 1} complete. Found ${gameErrors.length} mistakes/blunders.`);
+        allErrors.push(...gameErrors);
+      }
+
+      setStatus('aggregating');
+      addLog(`Aggregating patterns from ${allErrors.length} total errors...`);
+      const aggregatedData = aggregateErrors(allErrors);
+      
+      setStatus('generating');
+      addLog(`Requesting coaching report from Claude API...`);
+      
+      const response = await fetch('/api/coach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          aggregatedData,
+          rating,
+          white_opening: whiteOpening,
+          black_opening: blackOpening
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || "Failed to generate report");
+      }
+
+      const data = await response.json();
+      setReport(data.weaknesses);
+      setStatus('done');
+      addLog(`Analysis complete.`);
+      
+    } catch (err: any) {
+      console.error(err);
+      setStatus('error');
+      setErrorMsg(err.message);
+      addLog(`Error: ${err.message}`);
+    }
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="container">
+      <div className="text-center mb-8 animate-slide-up">
+        <h1 className="flex items-center justify-center gap-3">
+          <Award className="text-primary" size={40} />
+          AI Chess Coach
+        </h1>
+        <p>Grandmaster-level analysis of your recurring weaknesses</p>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-8">
+        {/* Left Column: Form / Logs */}
+        <div className="flex-col gap-6">
+          <div className="glass-panel animate-slide-up" style={{ animationDelay: '0.1s' }}>
+            <h2 className="flex items-center gap-2">
+              <Activity size={24} className="text-primary" />
+              Analysis Parameters
+            </h2>
+            
+            <form onSubmit={startAnalysis} className="flex-col gap-4 mt-4">
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label>Chess.com Username</label>
+                  <input 
+                    type="text" 
+                    className="glass-input" 
+                    value={username} 
+                    onChange={e => setUsername(e.target.value)} 
+                    required 
+                    disabled={status !== 'idle' && status !== 'done' && status !== 'error'}
+                  />
+                </div>
+                <div>
+                  <label>Current Rating</label>
+                  <input 
+                    type="number" 
+                    className="glass-input" 
+                    value={rating} 
+                    onChange={e => setRating(e.target.value)} 
+                    disabled={status !== 'idle' && status !== 'done' && status !== 'error'}
+                  />
+                </div>
+                <div>
+                  <label>White Opening</label>
+                  <input 
+                    type="text" 
+                    className="glass-input" 
+                    value={whiteOpening} 
+                    onChange={e => setWhiteOpening(e.target.value)} 
+                    disabled={status !== 'idle' && status !== 'done' && status !== 'error'}
+                  />
+                </div>
+                <div>
+                  <label>Black Opening</label>
+                  <input 
+                    type="text" 
+                    className="glass-input" 
+                    value={blackOpening} 
+                    onChange={e => setBlackOpening(e.target.value)} 
+                    disabled={status !== 'idle' && status !== 'done' && status !== 'error'}
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label>Games to Analyze</label>
+                  <select 
+                    className="glass-input"
+                    value={gamesCount}
+                    onChange={e => setGamesCount(e.target.value)}
+                    disabled={status !== 'idle' && status !== 'done' && status !== 'error'}
+                  >
+                    <option value="5">5 Games (Quick)</option>
+                    <option value="10">10 Games (Standard)</option>
+                    <option value="30">30 Games (Deep Pattern Search)</option>
+                  </select>
+                </div>
+              </div>
+
+              <button 
+                type="submit" 
+                className="btn-primary flex items-center justify-center gap-2"
+                disabled={status !== 'idle' && status !== 'done' && status !== 'error'}
+              >
+                {(status === 'idle' || status === 'done' || status === 'error') ? (
+                  <>
+                    <Search size={20} />
+                    Analyze My Games
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw size={20} className="animate-spin" />
+                    Processing...
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
+
+          {(status !== 'idle') && (
+            <div className="glass-panel mt-8 animate-slide-up" style={{ animationDelay: '0.2s' }}>
+              <h2 className="flex items-center gap-2 mb-4">
+                <Terminal size={24} className="text-primary" />
+                Live Analysis Console
+              </h2>
+              <div className="terminal-console">
+                {logs.map((log, idx) => (
+                  <div key={idx} className="terminal-line">{log}</div>
+                ))}
+                {(status !== 'done' && status !== 'error') && (
+                  <div className="terminal-line">
+                    <span className="animate-pulse">...</span>
+                    <span className="terminal-cursor"></span>
+                  </div>
+                )}
+                <div ref={logsEndRef} />
+              </div>
+            </div>
+          )}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        {/* Right Column: Report */}
+        <div>
+          {status === 'idle' && (
+            <div className="glass-panel flex-col items-center justify-center h-full text-center animate-slide-up" style={{ animationDelay: '0.2s', opacity: 0.7 }}>
+              <ShieldAlert size={64} className="text-slate-600 mb-4" />
+              <h2>No Data Yet</h2>
+              <p>Enter your details and click analyze to discover your recurring chess weaknesses.</p>
+            </div>
+          )}
+
+          {status === 'error' && (
+            <div className="glass-panel border-red-500/50 bg-red-950/20 animate-slide-up">
+              <h2 className="text-red-400">Analysis Failed</h2>
+              <p className="text-red-200">{errorMsg}</p>
+            </div>
+          )}
+
+          {status === 'done' && report.length > 0 && (
+            <div className="flex-col gap-6 animate-slide-up" style={{ animationDelay: '0.3s' }}>
+              <div className="glass-panel border-green-500/30 mb-6">
+                <h2 className="text-green-400 m-0">Coaching Report Ready</h2>
+                <p>Based on your last {gamesCount} games.</p>
+              </div>
+
+              {report.map((weakness, idx) => (
+                <div key={idx} className="glass-panel mb-6 relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-1 h-full bg-primary"></div>
+                  <h3 className="text-xl font-bold mb-3 flex items-center gap-2 text-primary">
+                    <span className="bg-primary/20 text-primary w-8 h-8 rounded-full flex items-center justify-center text-sm">
+                      {idx + 1}
+                    </span>
+                    {weakness.name.toUpperCase()}
+                  </h3>
+                  
+                  <div className="mb-4">
+                    <strong className="text-slate-300 block mb-1">Diagnosis:</strong>
+                    <p>{weakness.diagnosis}</p>
+                  </div>
+                  
+                  <div className="mb-4 bg-slate-800/50 p-3 rounded-md border border-slate-700/50">
+                    <strong className="text-slate-300 block mb-1">Example:</strong>
+                    <p className="text-sm font-mono text-slate-400">{weakness.example}</p>
+                  </div>
+                  
+                  <div>
+                    <strong className="text-emerald-400 block mb-1 flex items-center gap-2">
+                      <ChevronRight size={16} /> Drill:
+                    </strong>
+                    <p className="text-emerald-100/80 bg-emerald-900/20 p-3 rounded-md border border-emerald-800/30">
+                      {weakness.drill}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-      </main>
-    </div>
+      </div>
+    </main>
   );
 }
