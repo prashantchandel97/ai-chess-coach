@@ -6,10 +6,7 @@ import { Terminal, ShieldAlert, Award, Activity, Search, RefreshCw, ChevronRight
 
 export default function Home() {
   const [username, setUsername] = useState('prashant_chandel');
-  const [rating, setRating] = useState('1100');
-  const [gamesCount, setGamesCount] = useState('10');
-  const [whiteOpening, setWhiteOpening] = useState('London System');
-  const [blackOpening, setBlackOpening] = useState('Kings Indian Defense');
+  const [detectedProfile, setDetectedProfile] = useState<{rating: string, white: string, black: string} | null>(null);
   
   const [status, setStatus] = useState<'idle' | 'fetching' | 'analyzing' | 'aggregating' | 'generating' | 'done' | 'error'>('idle');
   const [logs, setLogs] = useState<string[]>([]);
@@ -55,6 +52,36 @@ export default function Home() {
       if (games.length === 0) {
         throw new Error("No recent games found.");
       }
+      
+      // Auto-detect profile from recent games
+      let lastRating = 'Unknown';
+      const whiteOpenings: Record<string, number> = {};
+      const blackOpenings: Record<string, number> = {};
+      
+      games.forEach(g => {
+        const isWhite = g.white.username.toLowerCase() === username.toLowerCase();
+        if (isWhite && g.white.rating) lastRating = g.white.rating.toString();
+        if (!isWhite && g.black.rating) lastRating = g.black.rating.toString();
+        
+        let eco = 'Unknown';
+        if (g.pgn) {
+           const match = g.pgn.match(/\[ECOUrl ".*\/openings\/(.*)"\]/);
+           if (match && match[1]) eco = match[1].replace(/-/g, ' ');
+           else if (g.eco) eco = g.eco.split('/').pop()?.replace(/-/g, ' ') || 'Unknown';
+        }
+        
+        if (isWhite) whiteOpenings[eco] = (whiteOpenings[eco] || 0) + 1;
+        else blackOpenings[eco] = (blackOpenings[eco] || 0) + 1;
+      });
+      
+      const mostFreqWhite = Object.entries(whiteOpenings).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unknown';
+      const mostFreqBlack = Object.entries(blackOpenings).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unknown';
+      
+      setDetectedProfile({
+        rating: lastRating,
+        white: mostFreqWhite,
+        black: mostFreqBlack
+      });
 
       setStatus('analyzing');
       const allErrors: ChessError[] = [];
@@ -88,9 +115,9 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           aggregatedData,
-          rating,
-          white_opening: whiteOpening,
-          black_opening: blackOpening
+          rating: lastRating,
+          white_opening: mostFreqWhite,
+          black_opening: mostFreqBlack
         })
       });
 
@@ -143,37 +170,6 @@ export default function Home() {
                     required 
                     disabled={status !== 'idle' && status !== 'done' && status !== 'error'}
                   />
-                </div>
-                <div>
-                  <label>Current Rating</label>
-                  <input 
-                    type="number" 
-                    className="glass-input" 
-                    value={rating} 
-                    onChange={e => setRating(e.target.value)} 
-                    disabled={status !== 'idle' && status !== 'done' && status !== 'error'}
-                  />
-                </div>
-                <div>
-                  <label>White Opening</label>
-                  <input 
-                    type="text" 
-                    className="glass-input" 
-                    value={whiteOpening} 
-                    onChange={e => setWhiteOpening(e.target.value)} 
-                    disabled={status !== 'idle' && status !== 'done' && status !== 'error'}
-                  />
-                </div>
-                <div>
-                  <label>Black Opening</label>
-                  <input 
-                    type="text" 
-                    className="glass-input" 
-                    value={blackOpening} 
-                    onChange={e => setBlackOpening(e.target.value)} 
-                    disabled={status !== 'idle' && status !== 'done' && status !== 'error'}
-                  />
-                </div>
                 <div className="col-span-2">
                   <label>Games to Analyze</label>
                   <select 
@@ -226,6 +222,26 @@ export default function Home() {
                   </div>
                 )}
                 <div ref={logsEndRef} />
+              </div>
+            </div>
+          )}
+
+          {detectedProfile && (status === 'done' || status === 'generating' || status === 'aggregating' || status === 'analyzing') && (
+            <div className="glass-panel mt-6 animate-slide-up" style={{ animationDelay: '0.3s' }}>
+              <h3 className="text-slate-300 text-sm font-semibold mb-3 uppercase tracking-wider">Detected Profile</h3>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="bg-slate-800/50 p-3 rounded-lg border border-slate-700">
+                  <div className="text-xs text-slate-400 mb-1">Rating</div>
+                  <div className="font-bold text-primary">{detectedProfile.rating}</div>
+                </div>
+                <div className="bg-slate-800/50 p-3 rounded-lg border border-slate-700">
+                  <div className="text-xs text-slate-400 mb-1">White Opening</div>
+                  <div className="font-bold text-slate-200 text-sm truncate" title={detectedProfile.white}>{detectedProfile.white}</div>
+                </div>
+                <div className="bg-slate-800/50 p-3 rounded-lg border border-slate-700">
+                  <div className="text-xs text-slate-400 mb-1">Black Opening</div>
+                  <div className="font-bold text-slate-200 text-sm truncate" title={detectedProfile.black}>{detectedProfile.black}</div>
+                </div>
               </div>
             </div>
           )}

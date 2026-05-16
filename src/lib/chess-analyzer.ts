@@ -3,8 +3,9 @@ import { Chess } from 'chess.js';
 export interface Game {
   pgn: string;
   url: string;
-  white: { username: string };
-  black: { username: string };
+  eco?: string;
+  white: { username: string; rating?: number };
+  black: { username: string; rating?: number };
 }
 
 export interface ChessError {
