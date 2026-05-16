@@ -34,7 +34,7 @@ export function ChessboardPanel({ fen, bestMove, playerColor, weaknessName, tip,
     customSquareStyles[bestFrom] = { background: 'rgba(59, 130, 246, 0.4)', borderRadius: '50%' };
   }
 
-  function onPieceDrop(sourceSquare: string, targetSquare: string, piece: string): boolean {
+  function handlePieceDrop({ piece, sourceSquare, targetSquare }: { piece: string; sourceSquare: string; targetSquare: string }): boolean {
     if (solved) return false;
     try {
       const isPromotion =
@@ -82,11 +82,13 @@ export function ChessboardPanel({ fen, bestMove, playerColor, weaknessName, tip,
 
         <div className="rounded-lg overflow-hidden mb-3">
           <Chessboard
-            position={currentFen}
-            onPieceDrop={onPieceDrop}
-            boardOrientation={playerColor}
-            customSquareStyles={customSquareStyles}
-            arePiecesDraggable={!solved}
+            options={{
+              position: currentFen,
+              boardOrientation: playerColor,
+              squareStyles: customSquareStyles,
+              allowDragging: !solved,
+              onPieceDrop: handlePieceDrop,
+            }}
           />
         </div>
 
