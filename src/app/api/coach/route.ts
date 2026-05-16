@@ -10,46 +10,33 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { aggregatedData, rating, white_opening, black_opening } = body;
 
-    const systemPrompt = `You are a chess coach with grandmaster-level knowledge. You speak directly and practically. You do not flatter. When you identify a weakness you name it precisely, explain why it keeps happening at the player's level, and give one concrete drill to fix it this week. Your output is always valid JSON.`;
+    const systemPrompt = `You are a chess coach. Return only valid JSON. Be brutal and concise.`;
 
-    const userPromptTemplate = `I am a chess player rated ${rating || 'unknown'}. I play ${white_opening || 'any'} as white and ${black_opening || 'any'} as black.
+    const userPrompt = `Player rated ${rating || 'unknown'}. Openings: ${white_opening || 'any'} (white), ${black_opening || 'any'} (black).
 
-You have analyzed my last recent games. Here is the aggregated error data:
-
+Error data (top 20 worst mistakes, each has game_index, move_number, fen, best_move in UCI format, drop in centipawns):
 ${JSON.stringify(aggregatedData, null, 2)}
 
-Identify my 3 most damaging recurring weaknesses. Ignore one-off blunders - focus only on patterns that appear across multiple games.
+Find 3 recurring weakness patterns. For each, pick the single clearest error from all_errors that best illustrates it.
 
-For each weakness return:
-1. name: a plain 3-5 word label (e.g. 'rook activation in endgames')
-2. diagnosis: 2-3 sentences explaining why this keeps happening and why it costs me games
-3. example: the game number and move where this was clearest (infer from data if you can, or provide a generic structural example based on the data)
-4. drill: one specific exercise I can do this week to fix it. Be concrete - name the tool, the position type, the number of reps.
-
-Be brutal. Do not soften findings. Return ONLY valid JSON array, no preamble:
-[{"name": "", "diagnosis": "", "example": "", "drill": ""}]`;
+Return ONLY this JSON (no preamble, no markdown):
+[{"name":"3-5 word label","game":game_index,"move":move_number,"fen":"fen string","best_move":"uci e.g. e2e4","tip":"one sentence max 12 words"}]`;
 
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 4096,
+      max_tokens: 800,
       system: systemPrompt,
-      messages: [{
-        role: "user",
-        content: userPromptTemplate
-      }]
+      messages: [{ role: "user", content: userPrompt }]
     });
 
     const content = response.content[0];
     if (content.type === 'text') {
       let jsonText = content.text;
-      
-      // Attempt to clean up if Claude included markdown formatting
-      if (jsonText.includes('\`\`\`json')) {
-        jsonText = jsonText.split('\`\`\`json')[1].split('\`\`\`')[0];
-      } else if (jsonText.includes('\`\`\`')) {
-        jsonText = jsonText.split('\`\`\`')[1].split('\`\`\`')[0];
+      if (jsonText.includes('```json')) {
+        jsonText = jsonText.split('```json')[1].split('```')[0];
+      } else if (jsonText.includes('```')) {
+        jsonText = jsonText.split('```')[1].split('```')[0];
       }
-      
       const weaknesses = JSON.parse(jsonText.trim());
       return NextResponse.json({ weaknesses });
     }
