@@ -6,6 +6,7 @@ import { Terminal, ShieldAlert, Award, Activity, Search, RefreshCw, ChevronRight
 
 export default function Home() {
   const [username, setUsername] = useState('prashant_chandel');
+  const [gamesCount, setGamesCount] = useState('10');
   const [detectedProfile, setDetectedProfile] = useState<{rating: string, white: string, black: string} | null>(null);
   
   const [status, setStatus] = useState<'idle' | 'fetching' | 'analyzing' | 'aggregating' | 'generating' | 'done' | 'error'>('idle');
@@ -170,6 +171,7 @@ export default function Home() {
                     required 
                     disabled={status !== 'idle' && status !== 'done' && status !== 'error'}
                   />
+                </div>
                 <div className="col-span-2">
                   <label>Games to Analyze</label>
                   <select 
