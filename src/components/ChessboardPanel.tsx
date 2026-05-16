@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import dynamic from 'next/dynamic';
 import { Chess } from 'chess.js';
+import type { DraggingPieceDataType } from 'react-chessboard/dist/types';
 import { X, CheckCircle, XCircle } from 'lucide-react';
 
 const Chessboard = dynamic(() => import('react-chessboard').then(m => m.Chessboard), { ssr: false });
@@ -34,11 +35,12 @@ export function ChessboardPanel({ fen, bestMove, playerColor, weaknessName, tip,
     customSquareStyles[bestFrom] = { background: 'rgba(59, 130, 246, 0.4)', borderRadius: '50%' };
   }
 
-  function handlePieceDrop({ piece, sourceSquare, targetSquare }: { piece: string; sourceSquare: string; targetSquare: string }): boolean {
-    if (solved) return false;
+  function handlePieceDrop({ piece, sourceSquare, targetSquare }: { piece: DraggingPieceDataType; sourceSquare: string; targetSquare: string | null }): boolean {
+    if (solved || !targetSquare) return false;
     try {
+      const pieceType = piece.pieceType.toLowerCase();
       const isPromotion =
-        piece.toLowerCase()[1] === 'p' &&
+        pieceType[1] === 'p' &&
         (targetSquare[1] === '8' || targetSquare[1] === '1');
       const move = chess.move({ from: sourceSquare, to: targetSquare, promotion: isPromotion ? 'q' : undefined });
       if (!move) return false;
