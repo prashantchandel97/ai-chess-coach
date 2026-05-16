@@ -50,20 +50,21 @@ export async function fetchGames(username: string, count: number): Promise<Game[
 
 export function evaluatePosition(fen: string, depth: number, stockfish: Worker): Promise<number> {
   return new Promise((resolve) => {
+    let latestScore = 0;
+    
     const handler = (e: MessageEvent) => {
       const msg = e.data;
-      if (typeof msg === 'string' && msg.startsWith('info depth ' + depth)) {
-        // Parse score
+      if (typeof msg === 'string') {
         const scoreMatch = msg.match(/score (cp|mate) (-?\d+)/);
         if (scoreMatch) {
           const type = scoreMatch[1];
           const val = parseInt(scoreMatch[2], 10);
+          latestScore = type === 'mate' ? (val > 0 ? 10000 - val : -10000 - val) : val;
+        }
+        
+        if (msg.startsWith('bestmove')) {
           stockfish.removeEventListener('message', handler);
-          if (type === 'mate') {
-            resolve(val > 0 ? 10000 - val : -10000 - val);
-          } else {
-            resolve(val); // centipawns
-          }
+          resolve(latestScore);
         }
       }
     };

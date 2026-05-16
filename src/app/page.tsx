@@ -94,7 +94,7 @@ export default function Home() {
           workerRef.current, 
           12, // depth
           (move, total) => {
-            if (move % 10 === 0) {
+            if (move % 5 === 0 || move === total) {
               addLog(`  Game ${i + 1}: Evaluating move ${move}/${total}`);
             }
           }
