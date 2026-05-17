@@ -34,4 +34,22 @@ export async function ensureSchema(sql: any) {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS tracked_users (
+      username TEXT PRIMARY KEY,
+      last_fetched TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS pending_games (
+      id SERIAL PRIMARY KEY,
+      username TEXT NOT NULL,
+      game_url TEXT NOT NULL,
+      pgn TEXT NOT NULL,
+      end_time BIGINT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(username, game_url)
+    )
+  `;
 }

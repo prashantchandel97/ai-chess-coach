@@ -14,10 +14,10 @@ export async function POST(req: Request) {
 
     const userPrompt = `Player rated ${rating || 'unknown'}. Openings: ${white_opening || 'any'} (white), ${black_opening || 'any'} (black).
 
-Error data (top 30 worst mistakes, each has game_index, move_number, fen, best_move in UCI format, drop in centipawns):
+Error data — phase-stratified (up to 12 opening, 12 middlegame, 6 endgame errors). Each error has: game_index, move_number, phase, fen, best_move (UCI), drop (centipawns), type (inaccuracy/mistake/blunder).
 ${JSON.stringify(aggregatedData, null, 2)}
 
-Identify 3 recurring weakness PATTERNS. For each pattern, collect ALL errors from all_errors that fit it (up to 5 examples, sorted by drop desc).
+Identify 3 recurring weakness PATTERNS. You MUST include at least one opening pattern if opening errors exist. For each pattern, collect ALL matching errors (up to 5 examples, sorted by drop desc).
 
 Return ONLY this JSON (no preamble, no markdown):
 [{"name":"3-5 word label","examples":[{"game":game_index,"move":move_number,"fen":"fen string","best_move":"uci e.g. e2e4"}],"tip":"one sentence max 12 words"}]`;

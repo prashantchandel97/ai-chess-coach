@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { fetchGames, analyzeGame, aggregateErrors, ChessError, Game } from '@/lib/chess-analyzer';
 import { ChessboardPanel } from '@/components/ChessboardPanel';
-import { Terminal, ShieldAlert, Award, Activity, Search, RefreshCw, History, Zap } from 'lucide-react';
+import { Terminal, ShieldAlert, Award, Activity, Search, RefreshCw, History, Zap, Bell } from 'lucide-react';
 
 interface WeaknessExample {
   game: number;
@@ -70,6 +70,7 @@ export default function Home() {
   const [history, setHistory] = useState<SessionRecord[]>([]);
   const [games, setGames] = useState<Game[]>([]);
   const [practiceData, setPracticeData] = useState<PracticeData | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -83,32 +84,55 @@ export default function Home() {
     if (logsEndRef.current) logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
+  // Load history + pending count whenever username changes
   useEffect(() => {
+    if (!username) return;
     setHistory(loadHistory(username));
-    // Also try loading from DB
+    setPendingCount(0);
+
+    // DB session history
     fetch(`/api/db/history?username=${encodeURIComponent(username)}`)
       .then(r => r.json())
       .then(d => {
         if (d.sessions?.length) {
-          const dbHistory: SessionRecord[] = d.sessions.map((s: any) => ({
+          setHistory(d.sessions.map((s: any) => ({
             date: new Date(s.created_at).toLocaleDateString(),
             games_count: s.games_count,
-            weaknesses: (s.weaknesses as Weakness[]).map((w: any) =>
+            weaknesses: (s.weaknesses as any[]).map((w: any) =>
               typeof w === 'string' ? w : (w.name ?? '').toLowerCase()
             ),
-          }));
-          setHistory(dbHistory);
+          })));
         }
       })
-      .catch(() => { /* fallback to localStorage already set */ });
+      .catch(() => {});
+
+    // Pending games from overnight cron
+    fetch(`/api/db/pending?username=${encodeURIComponent(username)}`)
+      .then(r => r.json())
+      .then(d => { if (d.count > 0) setPendingCount(d.count); })
+      .catch(() => {});
   }, [username]);
 
   const addLog = (msg: string) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+
+  // Register user as tracked (so cron picks them up daily)
+  async function ensureTracked(uname: string) {
+    try {
+      await fetch('/api/db/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: uname }),
+      });
+    } catch { /* non-critical */ }
+  }
 
   const startAnalysis = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username || !workerRef.current) return;
     setStatus('fetching'); setLogs([]); setReport([]); setErrorMsg('');
+
+    // Register for daily cron updates
+    ensureTracked(username);
 
     try {
       addLog(`Fetching last ${gamesCount} games for ${username}...`);
@@ -139,7 +163,7 @@ export default function Home() {
       const mostFreqBlack = Object.entries(blackOpenings).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unknown';
       setDetectedProfile({ rating: lastRating, white: mostFreqWhite, black: mostFreqBlack });
 
-      // ── Check DB cache ──
+      // Check DB cache
       addLog('Checking cached analysis...');
       const gameUrls = fetchedGames.map(g => g.url);
       let cachedErrors: Record<string, ChessError[]> = {};
@@ -153,7 +177,7 @@ export default function Home() {
         cachedErrors = cacheData.cached ?? {};
         const cachedCount = Object.keys(cachedErrors).length;
         if (cachedCount > 0) addLog(`Cache hit: ${cachedCount}/${fetchedGames.length} games already analyzed.`);
-      } catch { /* no cache available */ }
+      } catch { /* no cache */ }
 
       setStatus('analyzing');
       const allErrors: ChessError[] = [];
@@ -163,7 +187,7 @@ export default function Home() {
         const game = fetchedGames[i];
 
         if (cachedErrors[game.url]) {
-          addLog(`  Game ${i + 1}: using cached data (${cachedErrors[game.url].length} errors).`);
+          addLog(`  Game ${i + 1}: cached (${cachedErrors[game.url].length} errors).`);
           allErrors.push(...cachedErrors[game.url]);
           continue;
         }
@@ -173,7 +197,7 @@ export default function Home() {
         const gameErrors = await analyzeGame(game, username, workerRef.current!, 14, i, (move, total) => {
           if (move % 10 === 0 || move === total) addLog(`  Game ${i + 1}: move ${move}/${total}`);
         });
-        addLog(`  Game ${i + 1}: ${gameErrors.length} errors found.`);
+        addLog(`  Game ${i + 1}: ${gameErrors.length} errors (opening: ${gameErrors.filter(e => e.phase === 'opening').length}).`);
         allErrors.push(...gameErrors);
         gameErrorsForDb.push({
           url: game.url, pgn: game.pgn,
@@ -185,7 +209,7 @@ export default function Home() {
       }
 
       setStatus('aggregating');
-      addLog(`Aggregating ${allErrors.length} total errors...`);
+      addLog(`Aggregating ${allErrors.length} total errors (phase-stratified)...`);
       const aggregatedData = aggregateErrors(allErrors);
 
       setStatus('generating');
@@ -203,16 +227,29 @@ export default function Home() {
       setStatus('done');
       addLog('Analysis complete.');
 
-      // ── Save to DB + localStorage ──
+      // Save to DB + localStorage
       saveLocalSession(username, parseInt(gamesCount), weaknesses);
-      setHistory(h => [...h, { date: new Date().toLocaleDateString(), games_count: parseInt(gamesCount), weaknesses: weaknesses.map(w => w.name.toLowerCase()) }]);
+      setHistory(h => [...h, {
+        date: new Date().toLocaleDateString(),
+        games_count: parseInt(gamesCount),
+        weaknesses: weaknesses.map(w => w.name.toLowerCase()),
+      }]);
 
       if (gameErrorsForDb.length > 0) {
         fetch('/api/db/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, gamesCount: parseInt(gamesCount), rating: lastRating, weaknesses, gameErrors: gameErrorsForDb }),
-        }).catch(() => { /* non-critical */ });
+        }).catch(() => {});
+      }
+
+      // Clear pending games now that we've analyzed
+      if (pendingCount > 0) {
+        fetch('/api/db/pending', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username }),
+        }).then(() => setPendingCount(0)).catch(() => {});
       }
 
     } catch (err: any) {
@@ -220,7 +257,7 @@ export default function Home() {
     }
   };
 
-  const openPractice = (weakness: Weakness, exampleIdx: number = 0) => {
+  const openPractice = (weakness: Weakness, exampleIdx = 0) => {
     const ex = weakness.examples[exampleIdx];
     if (!ex) return;
     const game = games[ex.game];
@@ -249,6 +286,25 @@ export default function Home() {
         <p style={{ fontSize: '1rem', color: '#475569', marginTop: '0.25rem' }}>Grandmaster-level analysis of your recurring weaknesses</p>
       </div>
 
+      {/* Pending games banner */}
+      {pendingCount > 0 && (
+        <div className="animate-slide-up" style={{ marginBottom: '1.5rem', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: '1rem', padding: '0.875rem 1.25rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <Bell size={18} style={{ color: '#60a5fa', flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <span style={{ fontWeight: 700, color: '#93c5fd', fontSize: '0.9rem' }}>
+              {pendingCount} new game{pendingCount !== 1 ? 's' : ''} since your last analysis
+            </span>
+            <span style={{ color: '#475569', fontSize: '0.82rem', marginLeft: '0.5rem' }}>— fetched overnight · click Analyze to get your updated report</span>
+          </div>
+          <button
+            onClick={() => document.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))}
+            style={{ fontSize: '0.78rem', fontWeight: 800, background: '#3b82f6', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: '7px', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}
+          >
+            Analyze now →
+          </button>
+        </div>
+      )}
+
       <div className="grid md:grid-cols-2 gap-8">
 
         {/* ── Left column ── */}
@@ -273,7 +329,10 @@ export default function Home() {
                 </select>
               </div>
               <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }} disabled={isRunning}>
-                {isRunning ? <><RefreshCw size={18} className="animate-spin" /> Analyzing...</> : <><Search size={18} /> Analyze My Games</>}
+                {isRunning
+                  ? <><RefreshCw size={18} className="animate-spin" /> Analyzing...</>
+                  : <><Search size={18} /> {pendingCount > 0 ? `Analyze (${pendingCount} new)` : 'Analyze My Games'}</>
+                }
               </button>
             </form>
           </div>
@@ -374,7 +433,6 @@ export default function Home() {
                   <div key={idx} className="weakness-card">
                     <div className="weakness-card-accent" style={{ background: g.bar }} />
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.875rem' }}>
-                      {/* Number badge */}
                       <div style={{ width: '2.25rem', height: '2.25rem', borderRadius: '50%', background: g.num, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', fontWeight: 900, color: '#fff', flexShrink: 0, boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }}>
                         {idx + 1}
                       </div>

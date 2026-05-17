@@ -97,6 +97,8 @@ export async function analyzeGame(
   const board = new Chess();
   let prevScore: number | null = null;
 
+  // Disable opening book so Stockfish evaluates every position from scratch
+  stockfish.postMessage('setoption name OwnBook value false');
   stockfish.postMessage('ucinewgame');
 
   for (let i = 0; i < history.length; i++) {
@@ -107,13 +109,19 @@ export async function analyzeGame(
     if (prevScore !== null && move.color === playerColor) {
       const drop = playerColor === 'w' ? prevScore - normalizedScore : normalizedScore - prevScore;
 
-      if (drop > 20) {
+      // Lower threshold in the opening (moves 1-20) to catch subtle positional errors
+      const isOpening = i < 40; // half-moves, so 40 = move 20
+      const threshold = isOpening ? 15 : 20;
+
+      if (drop > threshold) {
+        const fullMove = Math.floor(i / 2) + 1;
+        const phase = i < 40 ? "opening" : i < 70 ? "middlegame" : "endgame";
         errors.push({
           game_index: gameIndex,
           game_url: game.url,
           best_move: bestMove,
-          move_number: Math.floor(i / 2) + 1,
-          phase: i < 30 ? "opening" : i < 70 ? "middlegame" : "endgame",
+          move_number: fullMove,
+          phase,
           piece_moved: move.piece.toUpperCase(),
           eval_before: prevScore,
           eval_after: normalizedScore,
@@ -134,6 +142,22 @@ export async function analyzeGame(
 }
 
 export function aggregateErrors(allErrors: ChessError[]) {
+  // Phase-stratified sampling — guarantees opening errors always reach Claude
+  // instead of always being buried below bigger middlegame/endgame blunders
+  const byPhase = { opening: [] as ChessError[], middlegame: [] as ChessError[], endgame: [] as ChessError[] };
+  allErrors.forEach(e => {
+    const phase = e.phase as keyof typeof byPhase;
+    if (byPhase[phase]) byPhase[phase].push(e);
+  });
+  const topPerPhase = (arr: ChessError[], n: number) =>
+    [...arr].sort((a, b) => b.drop - a.drop).slice(0, n);
+
+  const stratifiedErrors = [
+    ...topPerPhase(byPhase.opening, 12),
+    ...topPerPhase(byPhase.middlegame, 12),
+    ...topPerPhase(byPhase.endgame, 6),
+  ];
+
   const aggregated = {
     total_blunders: 0,
     total_mistakes: 0,
@@ -143,9 +167,7 @@ export function aggregateErrors(allErrors: ChessError[]) {
       endgame: { blunders: 0, mistakes: 0 }
     },
     errors_by_piece: { R: 0, N: 0, B: 0, Q: 0, P: 0, K: 0 } as Record<string, number>,
-    all_errors: allErrors
-      .sort((a, b) => b.drop - a.drop)
-      .slice(0, 30)
+    all_errors: stratifiedErrors,
   };
 
   allErrors.forEach(err => {
